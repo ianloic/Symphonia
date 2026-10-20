@@ -99,8 +99,12 @@ pub enum Emphasis {
 pub struct FrameHeader {
     pub version: MpegVersion,
     pub layer: MpegLayer,
+    // Only Layer 2 decoding reads the bitrate.
+    #[cfg_attr(not(feature = "mp2"), allow(dead_code))]
     pub bitrate: u32,
     pub sample_rate: u32,
+    // Only Layer 3 decoding reads the sample rate index.
+    #[cfg_attr(not(feature = "mp3"), allow(dead_code))]
     pub sample_rate_idx: usize,
     pub channel_mode: ChannelMode,
     #[allow(dead_code)]

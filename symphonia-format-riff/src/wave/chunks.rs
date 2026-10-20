@@ -97,9 +97,10 @@ impl WaveFormatChunk {
 
         // Block align is redundant for this format, but ideally it should be set correctly. Log if
         // it's incorrect.
-        let expected_block_align = num_channels * (bits_per_sample / 8);
+        // The number of channels hasn't been checked yet, so it can be anything a u16 holds.
+        let expected_block_align = u32::from(num_channels) * u32::from(bits_per_sample / 8);
 
-        if block_align != expected_block_align {
+        if u32::from(block_align) != expected_block_align {
             info!("fmt_pcm expected block align of {}, got {}", expected_block_align, block_align);
         }
 
@@ -749,6 +750,16 @@ fn map_wave_channel_count(count: u16) -> Result<Channels> {
         .flatten()
         .map(Channels::Positioned)
         .ok_or(Error::DecodeError("riff: invalid channel count"))
+}
+
+#[test]
+fn test_read_pcm_fmt_with_too_many_channels() {
+    use symphonia_core::io::BufReader;
+
+    // The expected block align of 65535 channels of 32-bit samples doesn't fit in a u16.
+    let mut reader = BufReader::new(&[]);
+    let result = WaveFormatChunk::read_pcm_fmt(&mut reader, 0, 32, u16::MAX, 16);
+    assert!(matches!(result, Err(Error::DecodeError(_))));
 }
 
 #[test]

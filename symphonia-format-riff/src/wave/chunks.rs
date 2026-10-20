@@ -339,7 +339,10 @@ impl WaveFormatChunk {
                 // channels.
 
                 // Fix the channel mask if it is invalid for the stated number of channels.
-                let channel_mask = fix_wave_channel_mask(channel_mask, num_channels);
+                let Some(channel_mask) = fix_wave_channel_mask(channel_mask, num_channels)
+                else {
+                    return unsupported_error("wav: too many channels for fmt_ext channel mask");
+                };
 
                 // Try to map the channel mask to positioned channels.
                 match Position::from_wave_channel_mask(channel_mask) {
@@ -676,7 +679,12 @@ pub fn read_info_chunk(source: &mut MediaSourceStream<'_>, len: u32) -> Result<M
 }
 
 /// Corrects a WAVE channel mask that doesn't is not valid for the stated number of channels.
-fn fix_wave_channel_mask(mut channel_mask: u32, num_channels: u16) -> u32 {
+/// Returns `None` if there are more channels than a channel mask can describe.
+fn fix_wave_channel_mask(mut channel_mask: u32, num_channels: u16) -> Option<u32> {
+    if num_channels > 32 {
+        return None;
+    }
+
     let channel_diff = num_channels as i32 - channel_mask.count_ones() as i32;
 
     if channel_diff != 0 {
@@ -687,7 +695,16 @@ fn fix_wave_channel_mask(mut channel_mask: u32, num_channels: u16) -> u32 {
     if channel_diff > 0 {
         // Too few ones in mask so add extra ones above the most significant one
         let shift = 32 - (!channel_mask).leading_ones();
-        channel_mask |= ((1 << channel_diff) - 1) << shift;
+        let channel_diff = channel_diff as u32;
+        if shift + channel_diff <= 32 {
+            channel_mask |= (u32::MAX >> (32 - channel_diff)) << shift;
+        }
+        else {
+            // There's no room above the most significant one, so set the lowest zeros instead.
+            while channel_mask.count_ones() != u32::from(num_channels) {
+                channel_mask |= channel_mask + 1;
+            }
+        }
     }
     else {
         // Too many ones in mask so remove the most significant extra ones
@@ -697,19 +714,30 @@ fn fix_wave_channel_mask(mut channel_mask: u32, num_channels: u16) -> u32 {
         }
     }
 
-    channel_mask
+    Some(channel_mask)
 }
 
 #[test]
 fn test_fix_channel_mask() {
     // Too few
-    assert_eq!(fix_wave_channel_mask(0, 9), 0b111111111);
-    assert_eq!(fix_wave_channel_mask(0b101000, 5), 0b111101000);
+    assert_eq!(fix_wave_channel_mask(0, 9), Some(0b111111111));
+    assert_eq!(fix_wave_channel_mask(0b101000, 5), Some(0b111101000));
+    assert_eq!(fix_wave_channel_mask(0, 32), Some(0xFFFFFFFF));
+    assert_eq!(fix_wave_channel_mask(0b1, 32), Some(0xFFFFFFFF));
+
+    // Too few, with no room above the most significant one
+    assert_eq!(fix_wave_channel_mask(0x80000000, 2), Some(0x80000001));
+    assert_eq!(fix_wave_channel_mask(0xF0000002, 7), Some(0xF0000007));
+    assert_eq!(fix_wave_channel_mask(0x40000000, 4), Some(0x40000007));
 
     // Too many
-    assert_eq!(fix_wave_channel_mask(0b1111111, 0), 0);
-    assert_eq!(fix_wave_channel_mask(0b101110111010, 5), 0b10111010);
-    assert_eq!(fix_wave_channel_mask(0xFFFFFFFF, 8), 0b11111111);
+    assert_eq!(fix_wave_channel_mask(0b1111111, 0), Some(0));
+    assert_eq!(fix_wave_channel_mask(0b101110111010, 5), Some(0b10111010));
+    assert_eq!(fix_wave_channel_mask(0xFFFFFFFF, 8), Some(0b11111111));
+
+    // More channels than a mask can describe
+    assert_eq!(fix_wave_channel_mask(0, 33), None);
+    assert_eq!(fix_wave_channel_mask(0xFFFFFFFF, u16::MAX), None);
 }
 
 /// Map a WAVE channel count to a set of channels.
